@@ -1,0 +1,487 @@
+---
+title: "PAC2: Anàlisi de dades d'ultrasecuenciació, RNA-seq amb Bioconductor"
+author: "Magda Pla Montferrer"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '3'
+  pdf_document:
+    toc: yes
+    toc_depth: 3
+  prettydoc::html_pretty:
+    highlight: github
+    number_sections: yes
+    theme: cayman
+    toc: yes
+link-citations: yes
+editor_options:
+  chunk_output_type: console
+
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, 
+                      comment = NA, prompt = TRUE, tidy = FALSE, 
+                      fig.width = 7, fig.height = 7, fig_caption = TRUE,
+                      cache=FALSE)
+Sys.setlocale("LC_TIME", "C")
+```
+
+```{r echo=FALSE}
+if(!(require(printr))) {
+  install.packages(
+    'printr',
+    type = 'source',
+    repos = c('http://yihui.name/xran', 'http://cran.rstudio.com')
+  )
+}
+```
+
+El present informe i les seves dades es pot consultar a https://github.com/MagdaPla/ADO_PAC2.git
+
+```{r echo=FALSE, message=FALSE}
+#Els paquets utilitzats en aquest exercici:
+#if(!require(BiocManager)) install.packages("BiocManager")
+#if(!require(DESeq2)) BiocManager::install("DESeq2")
+#if(!require(Rsubread)) BiocManager::install("Rsubread")
+#if(!require(org.Hs.eg.db)) BiocManager::install("org.Hs.eg.db")
+#if(!require(AnnotationDbi)) BiocManager::install("AnnotationDbi")
+#if(!require(ReportingTools)) BiocManager::install("ReportingTools")
+
+#if(!require(ggplot2)) install.packages("ggplot2", dep=TRUE)
+#if(!require(dplyr)) install.packages("dplyr", dep=TRUE)
+#if(!require(magrittr)) install.packages("magrittr", dep=TRUE)
+#if(!require(pheatmap)) install.packages("pheatmap", dep=TRUE)
+#if(!require(RColorBrewer)) install.packages("RColorBrewer", dep=TRUE)
+#if(!require(ggbeeswarm)) install.packages("ggbeeswarm", dep=TRUE)
+```
+
+# 1. Abstract
+
+En aquest document es proposa una metodologia amb el codi en R complet per a realitzar un procés d'anàlisis de dades d'ultraseqüenciació (RNA-seq) amb Bioconductor proposant un flux d'informació basat en els estàndars proposats a la web de Bioconductor (http://master.bioconductor.org/packages/release/workflows/vignettes/rnaseqGene/inst/doc/rnaseqGene.html#aligning-reads-to-a-reference-genome). 
+
+# 2. Objectius
+
+L'objectiu principal del document és il·lustrar un procés d'anàlisis de dades d'ultraseqüenciació mitjançant la realització d'un estudi de principi a fi com es pot dur a terme en un cas real.  
+
+# 3. Material i mètodes 
+
+## 3.1.Naturalesa de les dades
+
+En aquesta proposta metodològica es parteixen de dades extretes del repositori GTEx ( *Genotype-Tissue Expression*) que conté múltiple informació de 54 tipus de teixits. Concretament ens centrarem en les dades d'expressió (RNA-seq) d'un anàlisis de tiroides on es comparen tres tipus d'infiltracions mesurades en un total de 292 mostres:
+
+• *Not infiltrated tissues* (NIT): 236 mostres
+
+• *Small focal infiltrates* (SFI): 42 mostres
+
+• *Extensive lymphoid infiltrates* (ELI): 14 mostres.
+
+Sobre aquest nombre de mostres es seleccionaran a l'atzar 10 mostres de cada grup i s'analitzaran les dades d'expressió comparant diferents grups entre ells.
+
+## 3.2 Mètodes utilitzats en l'anàlisis
+
+Per a començar haurà estat necessari preparar els directoris corresponents on emmagatzemar les dades brutes i si convé els directoris on es desaran els resultats. També s'haurà realitzarà la instal·lació de les llibreries necessàries. Una vegada la part més tècnica estigui a punt, es procedeix a realitzar l'anàlisis: preparació de les dades i anàlisis d'ultraseqüenciació pel que es proposen els següents passos: 
+
+*1. Definició de les dades utilitzades (realitzat en el punt 3.1)
+
+*2. Selecció de les mostres a l'atzar
+
+*3. Processat de les dades: filtrat i normalització
+
+*4. Identificació de gens diferencialment expresats
+
+*5. Anotació dels resultats 
+
+*6. Cerca de patrons d'expressió i agrupació de les mostres (comparació entre les 
+diferents comparacions)
+
+*7. Anàlisis de significació biològica (“Gene Enrichment Analysis”)
+
+## 3.3.Procediment
+
+### 3.3.1. Selecció de les mostres a l'atzar.
+
+La informació de partida es troba en dos fitxers: counts.csv i targets.csv; els quins es desaran en el directori "dades". El fitxer `targets.csv` conté una descripció de cadascuna de les 292 mostres originals (grup, gènere, mostra, etc.). El fitxer `counts.csv` conté pròpiament la informació del RNA-m la ultraseqüenciació, té tantes columnes com mostres i en cada registre hi ha la inforemació d'expressió gènica d'interès. Les taules següents són una petita mostra del contingut dels fitxers.
+
+```{r echo=FALSE}
+setwd(".")
+targets <- read.csv("./dades/targets.csv", sep = ",", row.names = 1)
+counts <- read.csv("./dades/counts.csv", sep = ";", row.names = 1) 
+knitr::kable(
+   head(targets), booktabs = TRUE,
+   caption = 'Taula 1. Contingut del fitxer *targets.csv* utilitzat en aquest anàlisis')
+
+knitr::kable(
+   counts[1:5, 1:3], booktabs = TRUE,
+   caption = 'Taula 2. Mostra del contingut del fitxer *counts.csv* utilitzat en aquest anàlisis, concretament els 5 primers registres i les tres primeres columnes')
+
+```
+
+El camp "Group" de la taula `targets.csv` indica el tipus d'infiltració: NIT, SFI o ELI. El camp "Sample_Name" conté el nom de la mostra que es correspon amb cadascuna de les columnes de el fitxer `counts.csv`. Així doncs, a sobre el fitxer `targets.csv` es sel·leccionaran 10 mostres a l'atzar de cada grupa partir del camp "Group". A partir del camp "Sample_Name" de la sel·lecció feta s'extrauran les columnes corresponents del fitxer `counts.csv. 
+
+NOTA: en aquest exemple concret, hi ha dades mol·leculars tipus RNA-seq i també Expressió al·lèlica específica. Es pren la decisió de sel·leccionar només els registres amb informació només de RNA-seq. 
+
+Per a fer la sel·lecció a l'atzar s'ha utilitzat la llibreria **dplyr**, la funció `filter()` primer per a filtrar els registres de dades de RNA-seq i a continuació les funcions de `sample_n()` i `by_group()` per a escollir a l'atzar n mostres de cada grup. 
+
+```{r}
+library(dplyr) # realitzem la sel·lecció amb la llibreria 'dplyr'
+RNAseq_targets <- filter(targets, molecular_data_type=="RNA Seq (NGS)")
+
+
+set.seed(123) # per a fer la sel·lecció reproduïble definim una llavor
+# primer de tot es fa una agrupació de la taula target per el camp "Group"
+agrupa <- RNAseq_targets %>% group_by(Group)
+
+# A continaució amb 'sample_n()' sel·leccionem de cada grup 10 mostres a l'atzar de cada grup.
+sel<-sample_n(agrupa, 8)
+
+```
+NOTA: en aquest cas concret de dades, resulta que d'una de les categories de infiltració amb dades de RNA-seq només hi ha 8 mostres. Es podria escollir una opció que permetés repetir mostres o bé permetre que d'un grup hi hagi menys mostres, però s'ha cregut convenient disminuïr el nombre de mostres de cada grup per tal de no esbiaixar els resultats.
+
+Les mostres sel·leccionades són les següents:
+```{r echo=FALSE}
+knitr::kable(
+   sel, booktabs = TRUE,
+   caption = 'Taula 3. La Taula mostra les 30 mostres sel·leccionades al atzar de cadascun dels tres grups (NIT,SFI,ELI)')
+```
+
+Per a poder fer la extracció de les columnes corresponents a la taula `counts.csv` em cal canviar una mica la nomenclatura del nom dels fitxers. Concretament, cal substituïr el caràcter "-" per ".". Hi ha moltes maneres de fer-ho, la proposada crea un nou camp amb la nomenclatura correcte utilitzant la funció `g_sub()`:
+```{r}
+#definim la selecció com un data.frame
+sel1<-as.data.frame(sel) 
+# canviem el caràcter desitjat creant un nou camp i alhora es crea un vector amb tots els noms sel·leccionats
+New_Sample_Name<-gsub("-", ".", sel1$Sample_Name) 
+# unim el nou camp a la taula final per si ho necessitem més endavant
+target_subset<-cbind(sel1,New_Sample_Name)
+# veiem una petita mostra
+# head(target_subset) 
+```
+
+A continuació cal extreure la informació del fitxer `counts.csv` només per a les mostres seleccionades a l'atzar en aquest primer pas. Es pot utilitzar també amb el paquet **diplyr** i la funció `select()`:
+```{r}
+#utilitzem el vector "New_sample_Name" per seleccionar els camps requerits i també el primer camp "X"
+counts_subset <- select(counts,all_of(c(target_subset$New_Sample_Name))) 
+# altres comprobacions de la extracció
+dim(counts_subset)
+#names(counts_subset)
+#head(counts_subset[1:3, 1:3])
+
+```
+
+Així doncs la informació la tenim a punt per analitzar a **"counts_subset"** és propiament una "count matrix" o matriu de contatges i començar propiament l'anàlisis. Les matrius de contatges contene a cada fila un gen de Ensembles, amb el codi corresponent a la primera columna (en aquest cas anomenada "X"). A cada columna hi ha les diferents mostres de RNA-seq i el contingut són els nombre de fragments assignats a cada gen en cadascuna de les mostres corresponents.
+
+Una vegada tenim la informació sel·leccionada, la prepararem per a l'anàlisis. Per això ens cal crear un DESeqDataSet, ho realitzarem amb la funció `DESEqDataSetFromMatrix()` del paquet *Rsubread* definint com a "countdata" la sel·lecció de la matriu de contatges i com a "colData" la taula amb la descripció de les dades. És important també definir com a "design" el camp "Group".
+```{r}
+library(DESeq2)
+library(Rsubread)
+
+countdata<-counts_subset
+coldata<- target_subset
+
+ddsMat <- DESeqDataSetFromMatrix(countData = countdata,
+                                 colData = coldata,
+                                 design = ~ Group)
+
+ddsMat
+```
+
+### 3.3.3 Processat de les dades: filtrat i normalització
+
+Hi ha algunes contatges que tenen valors més baixos. Pot resultar recomanable filtrar aquestes registres de cara a no esbiaixar els resultats. En aquest exercici es realitzarà un filtrat dels registres que tenen 0 contatges en tots els experiments o bé els que tenen contatges en un sol experiment.   
+```{r}
+keep <- rowSums(DESeq2::counts(ddsMat)) > 1
+ddsMat <- ddsMat[keep,]
+```
+Després d'aquest filtrat, la mida de la matriu de contatges es redueix passant de *`r nrow(countdata)`* registres a *`r nrow(ddsMat)`*.
+
+També es realitzarà un procés de normalització o estabilització de la variança. S'utilitzarà el mètode VST implementat a *DESeq2*, perquè és ràpid i recomanable per datasets mitjans.
+En la funció `vst()` li indiquem el paràmetre "blind=FALSE" la diferència entre les variables en el disseny (el tipus d'infiltració) no s'utilitzi en la transforamció, només en estimar la quantaitat de variació total en els contatges.  
+
+```{r}
+vsd <- vst(ddsMat, blind = FALSE)
+```
+
+Tal i com es pot veure a continaució, el mètode VST retorna un objecte DESeqTransform basat en la classe SummarizedExperiemnt així que per a veure-ho cal utilitzar la funció `assay()` doncs emmagatzema la informació en un "assay" i podem visualitzar-los fent un `assay(vsd)`. Tal i com es mostra a la taula següent, els valors transformats ja no són contatges:
+
+```{r echo=FALSE}
+knitr::kable(
+   head(assay(vsd),3), booktabs = TRUE,
+   caption = 'Taula 4. Transformació dels contatges amb el mètode VST')
+```
+
+### 3.3.4 Identificació de gens diferencialment expresats
+
+Un dels primera passos per analitzar les diferències i similituds entre mostres, claculant la istància entre aquestes i visualitzant les distàncies amb gràfiques.
+```{r}
+sampleDists <- dist(t(assay(vsd)))
+#sampleDists 
+```
+Es podria consultar la taula resultant de distàncies però pot resultar més entenedor veure les distàncies entre mostres de manera gràfica. Es poden representar les dades utilitzant mapes de calor (heat maps), les components principals (PCA) o també el *Multidimensional Scalling* o MDS. A continuació s'ha  preparat el codi per els tres tipus de gràfics, però després d'analitzar les dades concretes de l'exemple només es mostra el resultat de les PCA, la resta de codi es descriu per a poder repetir l'exercici amb altres dades.
+
+```{r}
+# Mapa de calor o HeatMap:
+#library(pheatmap)
+#library(RColorBrewer)
+
+#sampleDistMatrix <- as.matrix( sampleDists )
+#rownames(sampleDistMatrix) <- vsd$Group 
+#colnames(sampleDistMatrix) <- NULL
+#colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+#pheatmap(sampleDistMatrix,
+#         clustering_distance_rows = sampleDists,
+#         clustering_distance_cols = sampleDists,
+#         col = colors)
+
+
+# PCA
+plotPCA(vsd, intgroup = c("Group"))
+
+#library(ggplot2)
+#mds <- as.data.frame(colData(vsd))  %>%
+#         cbind(cmdscale(sampleDistMatrix))
+#ggplot(mds, aes(x = `1`, y = `2`, color = vsd$Group)) +
+#  geom_point(size = 3) + coord_fixed()
+```
+
+El gràfic de les dues compoents principals no és massa explicatiu per aquestes dades. La primera i segona component expliquen només el 22% i 18% respectivament (menys del 50% entre les dues) i alhora les mostres no semblen tanir cap patró en funció del grup d'infiltració. No obstant, en el context de l'exercici s'ha cregut important mostrar la possibilitat de mostrar una representació gràfica de les dades i obrir la possibilitat a realitzar altres tipus de representació. 
+
+A continuació es procedeix pròpiament amb l'anàlisis de l'expressió diferencial, es pot utilitzar la funció DESeq sobre la matriu de contatges. S'ha utilitzat la funció `DESeq()`del paquet **DESeq2**, però també es podrin utilitzar altres paquets com **edgeR** (https://www.bioconductor.org/packages/release/bioc/html/edgeR.html).
+```{r}
+dds <- DESeq(ddsMat, parallel =TRUE)
+```
+
+Tal i com es pot veure per un fragment de la informació contrastada:
+```{r}
+res<-results(dds)
+res
+```
+
+Els resultats generals oferreixen per a cada gen la següent informació:
+
+* `baseMean`: mitjana dels valors de contatge normalitzats/mida dels factors
+* `Log2FoldChange`: mesura com pot haver canviat l'expresssió gènica degut al tractament en comparació a les mostres no tractades.Valor reportat en escala logarítmica de base 2.
+* `lfcSE`: mesura d'incertesa associada al valor de Log2FoldChange, concretament l'error estàndard.
+* `stat`: estatistic Wald
+* `pvalue`: nivell de significació de la diferència
+* `padj`: p-value ajustat
+
+A continuació es poden presentar els resultats mostrant el contrast entre els diferents grups d'infiltracions. Es realitzaran 3 comparacions: SFI-NIT, ELI-NIT i ELI-SFI, utilitzant un nivell de significació estricte de 0.05. 
+
+1- Contrast entre SFI i NIT
+```{r}
+#conrast entre SFI-NIT utilitzant els valors més significatius (p-value<0.05)
+res1 <- results(dds, contrast=c("Group", "SFI", "NIT"), alpha=0.05)
+summary(res1)
+
+# per veure quants gens són significativament diferents dins d'aquesta comparació
+table(res1$padj < 0.05)
+```
+
+Segons els resultats anteriors, només hi ha tres gens que mostren diferències significatives entre SFI i NIT. No hi ha outliers. 
+Hi ha altres possibilitats de parametrització per a ser més restrictius alhora d'escollir el nombre de genes realment diferencials. Es pot canviar el punt de tall del log2 fold change, en aquest cas però hi ha molt pocs gens significativament diferents i si variem aquest punt de tall no en trobem cap. Aquestes mesures poden ser útils per a ser més sel·lectiu en el cas que el resultat inicial mostrés molts gens diferents. En aquest exemple però no  es troben gens significatius quan restringim tant punt de tall.
+
+2- Contrast entre ELI i NIT
+```{r}
+#conrast entre SFI-NIT utilitzant els valors més significatius (p-value<0.05)
+res2 <- results(dds, contrast=c("Group", "ELI", "NIT"), alpha=0.05)
+summary(res2)
+
+# per veure quants gens són significativament diferents dins d'aquesta comparació
+table(res2$padj < 0.05)
+```
+Malgrat s'ha disminuït l'exigència de l'ajust, tal i com mostra el resultat general entre aquest dos grups d'infiltració no hi ha gens significativament diferents.
+
+3- Contrast entre ELI i SFI
+```{r}
+#conrast entre SFI-NIT utilitzant els valors més significatius (p-value<0.05)
+res3 <- results(dds, contrast=c("Group", "ELI", "SFI"), alpha=0.05)
+summary(res3)
+
+# per veure quants gens són significativament diferents dins d'aquesta comparació
+table(res3$padj < 0.05)
+```
+Malgrat s'ha disminuït l'exigència de l'ajust, tal i com mostra el resultat general entre aquest dos grups d'infiltració no hi ha gens significativament diferents.
+
+
+Es poden veure els resultats del contatge gràficament per un gen concret, que s'escull a partir de la comparació entre els dos tractaments més diferenciats (SFI i NIT)
+```{r}
+topGene <- rownames(res1)[which.min(res1$padj)]
+plotCounts(dds, gene = topGene, intgroup=c("Group"))
+```
+En la gràfica es mostra que en els dos grups NIT i SFI hi ha contatges realment diferents per aquest gen, es poden tenir entre 20 i 500 contatges, mentre que amb la el grup SFI hi ha entre 1 i 30 contatges. 
+
+Hi hauria altres possibilitats de gràfics per visualitzar la diferenciació, però amb els resultats inicials ja es veu que hi ha molts poc gens expressats diferentment. Això fa que les altres tipus de gràfiques no siguin explicatives, per aquest motiu no s'han inclòs en l'anàlisis.
+
+Per a més informació si es treballa amb altres dades, es pot consultar: http://master.bioconductor.org/packages/release/workflows/vignettes/rnaseqGene/inst/doc/rnaseqGene.html#sample-distances
+
+
+### 3.3.5 Anotació dels resultats 
+
+Les taules resultants contenen els IDs dels gens segons Ensembles, però es pot tenir més informació sobre cada gen que pot ser més informativa per interpretar els resultats. Així doncs, resulta interessant afegir aquesta inforamció explicativa (anotacions) a partir de grans bases de dades sobre gens. 
+
+El paquet de **AnnotationDbi** de Bioconductor permet realitzar-ho, juntament amb la llibreria de gens sobre Homo sapiens **org.Hs.eg.db**. Concretament la funció `MapIds()` permet afegir informació. S'afegiran dues noves columnes: "SYMBOL" i "ENTREZID". Per a fer-ho, aquesta funció permet realitzar un join entre es dues taules: la taula dels resultas i la base de dades general. Es defineix el camp clau entre les dues taules: "ENSEMBLE" i el nom de les columnes que s'afegiran: SYMBOL i ENTREZID. Cal indicar en la taula dels resultats com es diu el camp clau. 
+
+NOTA: en l'exemple presentat, el camp clau de la taula de resultats és el nom de les files: `row.names(resX)`; però resulta que al final del codi Ensemble té uns caràcter de més. Perquè puguin coïncidir exacatament amb la informaicó clau de la base de dades de *Homo sapiens* cal treure aquests caràcters de més. Concretament cal eliminar un "." i el número que hi ha després del punt. Aquest procés es realitza alhora de definir el paràmetre "key=":
+
+```{r}
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+columns(org.Hs.eg.db)
+
+# per afegir el camp SYMBOL
+res1$symbol <- mapIds(org.Hs.eg.db,
+                     keys=gsub("\\..*", "", row.names(res1), fixed = FALSE), #amb gsub() eliminem el ".n"
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+# per afegir el camp ENTREZID
+res1$entrez <- mapIds(org.Hs.eg.db,
+                     keys=gsub("\\..*", "", row.names(res1), fixed = FALSE),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+# veiem el resultat de les funcions d'afegir aquestes anotacions ordenat pel p-value: 
+resOrdered1 <- res1[order(res1$pvalue),]
+head(resOrdered1)
+```
+
+Aquest procés es repeteix per a les altres dues taules de resultats.
+```{r echo=FALSE}
+#comparació 2
+res2$symbol <- mapIds(org.Hs.eg.db,
+                     keys=gsub("\\..*", "", row.names(res2), fixed = FALSE), #amb gsub() eliminem el ".n"
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+
+res2$entrez <- mapIds(org.Hs.eg.db,
+                     keys=gsub("\\..*", "", row.names(res2), fixed = FALSE),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+resOrdered2 <- res2[order(res2$pvalue),]
+
+#comparació 3
+res3$symbol <- mapIds(org.Hs.eg.db,
+                     keys=gsub("\\..*", "", row.names(res3), fixed = FALSE), #amb gsub() eliminem el ".n"
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+
+res3$entrez <- mapIds(org.Hs.eg.db,
+                     keys=gsub("\\..*", "", row.names(res3), fixed = FALSE),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+resOrdered3 <- res3[order(res3$pvalue),]
+```
+
+Els resultats amb les anotacions es poden exportar a taules csv o fer uns reports en html:
+```{r}
+resOrderedDF1 <- as.data.frame(resOrdered1)
+# com a csv:
+write.csv(resOrderedDF1, file = "res1.csv")
+
+#amb una eina de reporting en format html:
+library(ReportingTools)
+htmlRep1 <- HTMLReport(shortName="report1", title="My report",
+                      reportDirectory=".")
+publish(resOrderedDF1, htmlRep1)
+url <- finish(htmlRep1)
+#browseURL(url) # per obrir el report final 
+
+```
+El procés d'exportació s'ha realitzat només com a exemple, només s'ha exportat la resposta de la comparació 1, es pot fer per a la resta canviant els noms correponents.
+
+### 3.3.6 Cerca de patrons d'expressió i agrupació de les mostres (comparació entre les diferents comparacions)
+
+Els gràfics tipus MAplots s'observen els canvis d'expressió entre parelles de mostres
+```{r}
+library(apeglm)
+
+
+par(mfrow=c(1,3), mar=c(4,4,2,1))
+ylim <- c(-5,5)
+xlim <- c(1e-2,1e5)
+plotMA(res1, xlim=xlim, ylim=ylim, main="SFI vs NIT")
+plotMA(res2, xlim=xlim, ylim=ylim, main="ELI vs NIT")
+plotMA(res3, xlim=xlim, ylim=ylim, main="ELI vs SFI")
+```
+
+O bé també es pot realitzar un anàlisis cluster en un HeatMap, sel·leccionant però els gens amb més variança entre mostres. Alhora si només ens fixem en quant es desvia cada gen d'una mostra específica de la mitjana entre mostres. 
+```{r}
+library("genefilter")
+#seleccionem els 10 gens 
+topVarGenes <- head(order(rowVars(assay(vsd)), decreasing = TRUE), 10)
+
+mat  <- assay(vsd)[ topVarGenes, ]
+mat  <- mat - rowMeans(mat)
+anno <- as.data.frame(colData(vsd)[, c("Group")])
+rownames(anno) <- colnames(vsd)
+pheatmap(mat, annotation_col = anno)
+```
+El heatMap resultant però no mostra clarament diferències o similituds entre grups.
+
+### 3.3.7 Anàlisis de significació biològica (“Gene Enrichment Analysis”)
+A continuació es pretén interpretar bé els resultats dotant-los de un significat biològic. Per a la correcta interpretació és necessari conèixer bé el problema biològic però alhora també hi ha aproximacions estadístiques que poden ajudar a realitzar aquesta interpretació. 
+
+Hi ha diferents variants d'aquesst tipus d’anàlisis. A continaució s'utilitzarà l’anàlisi d’enriquiment bàsic implementat al paquet *CulsterProfiles* https://yulab-smu.github.io/clusterProfiler-book/
+
+Inicialment es seleccionen els tres gens que mostraven diferències significatives amb un padj<0.05, quin correspon als tres primers registres de la taula de resulats ordenada i enriquida (resOrderedDF1)
+```{r}
+gen_sel<-filter(resOrderedDF1, padj<0.05)
+gen_sel
+entrez_gen_sel <- gen_sel$entrez
+entrez_gen_sel
+```
+
+A continuació es compararia la llista de gens sel·leccionats amb una base de dades de gens, o amb tots els gens. Una de les opcions del clusterProfiles és compara la nostra llista de gens amb la de una base de de dades de lliure accés (PAthway) on existeix informació de diferents espècies, en aquest cas es descarrega la base corresponent als homes.  
+```{r}
+
+library(rWikiPathways)
+library(qusage)
+library(magrittr)
+library(clusterProfiler)
+
+# base de dades Pathway per a Homo sapiens en format GTM
+wpgmtfile <- downloadPathwayArchive(organism = "Homo sapiens", format = "gmt")
+wpgmtfile
+
+wp2gene <- read.gmt(wpgmtfile)
+wp2gene <- wp2gene %>% tidyr::separate(ont, c("name","version","wpid","org"), "%")
+wpid2gene <- wp2gene %>% dplyr::select(wpid, gene) #TERM2GENE
+wpid2name <- wp2gene %>% dplyr::select(wpid, name) #TERM2NAME
+
+head(wpid2name)
+# procés d'enriquimetn de la informació
+ewp <- enricher(entrez_gen_sel, TERM2GENE = wpid2gene, TERM2NAME = wpid2name)
+#dim(ewp)
+```
+La taula resultant mostra les relacions i les estadístiques associades per a cadascun dels gens relacionats:
+```{r}
+# per a veure la taula resultant de l'enriquiment. Veiem que té 12 registres i mirem tota la informació
+ewp[1:12,]
+```
+
+# 4.Resultats
+
+Com a resultats es tenen una diferents sortides en forma de taula i gràfic que mostren el resultat dels filtratges de dades, taules amb estadístics sobre l'expressió gènica diferencial per als tres tipus de comparacions entre grups. Gràfics que mostren les relacions entre els gens que s'expressen més en cadascun dels tractaments com a resultat de totes les probes fetes.   
+
+# 5.Discusió
+
+Les dades utilitzades no mostraven moltes diferències entre els diferents tipus d'infiltració. En aquest sentit ha limitat alguns aspectes metodològics o resultats obtinguts.
+
+
+# 7.Referències
+
+http://master.bioconductor.org/packages/release/workflows/vignettes/rnaseqGene/inst/doc/rnaseqGene.html#references
+
+https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#ma-plot
+
