@@ -223,8 +223,8 @@ Es podria consultar la taula resultant de distàncies però pot resultar més en
 
 ```{r}
 # Mapa de calor o HeatMap:
-#library(pheatmap)
-#library(RColorBrewer)
+library(pheatmap)
+library(RColorBrewer)
 
 #sampleDistMatrix <- as.matrix( sampleDists )
 #rownames(sampleDistMatrix) <- vsd$Group 
